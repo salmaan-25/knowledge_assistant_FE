@@ -1,0 +1,4 @@
+#!/usr/bin/env sh
+
+# Run lint and production build before committing
+npm run check
