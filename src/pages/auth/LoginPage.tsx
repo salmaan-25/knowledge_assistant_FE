@@ -20,7 +20,7 @@ import {
   Email as EmailIcon,
   Lock as LockIcon,
 } from "@mui/icons-material";
-import { useLoginMutation } from "../../store/api/apiSlice";
+import { api, useLoginMutation } from "../../store/api/apiSlice";
 import { useAppDispatch } from "../../hooks/useAppStore";
 import { setCredentials } from "../../store/slices/authSlice";
 
@@ -39,6 +39,7 @@ export function LoginPage() {
     setError(null);
     try {
       const res = await login({ email, password }).unwrap();
+      dispatch(api.util.resetApiState());
       dispatch(setCredentials({ token: res.access_token }));
       navigate("/dashboard");
     } catch (err: unknown) {

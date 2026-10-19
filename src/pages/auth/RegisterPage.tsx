@@ -21,7 +21,7 @@ import {
   Lock as LockIcon,
   Person as PersonIcon,
 } from "@mui/icons-material";
-import { useRegisterMutation, useLoginMutation } from "../../store/api/apiSlice";
+import { api, useRegisterMutation, useLoginMutation } from "../../store/api/apiSlice";
 import { useAppDispatch } from "../../hooks/useAppStore";
 import { setCredentials } from "../../store/slices/authSlice";
 
@@ -53,6 +53,7 @@ export function RegisterPage() {
 
       // Auto-login after successful registration
       const loginRes = await login({ email, password }).unwrap();
+      dispatch(api.util.resetApiState());
       dispatch(setCredentials({ token: loginRes.access_token }));
       navigate("/dashboard");
     } catch (err: unknown) {
