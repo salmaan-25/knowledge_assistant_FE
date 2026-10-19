@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
   Box,
@@ -9,10 +9,13 @@ import {
   MenuItem,
   FormControl,
   InputLabel,
-  Chip,
   CircularProgress,
-  Paper,
   Tooltip,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Button,
   alpha,
   useTheme,
 } from "@mui/material";
@@ -20,12 +23,15 @@ import {
   Send as SendIcon,
   ArrowBack as BackIcon,
   Description as DocIcon,
+  DeleteOutlined as DeleteIcon,
 } from "@mui/icons-material";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   useListDocumentsQuery,
   useChatMutation,
+  useGetChatHistoryQuery,
+  useClearChatHistoryMutation,
 } from "../../store/api/apiSlice";
 import type { SourceReference } from "../../types/api";
 
@@ -34,58 +40,8 @@ interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   sources?: SourceReference[];
+  has_sufficient_context?: boolean;
   timestamp: Date;
-}
-
-function SourcePill({ source }: { source: SourceReference }) {
-  const [open, setOpen] = useState(false);
-  const theme = useTheme();
-  return (
-    <Box sx={{ position: "relative", display: "inline-block" }}>
-      <Chip
-        size="small"
-        label={`Page ${source.page_number ?? "?"}`}
-        onClick={() => setOpen((v) => !v)}
-        sx={{
-          height: 20,
-          fontSize: "0.7rem",
-          cursor: "pointer",
-          background: alpha(theme.palette.secondary.main, 0.12),
-          color: theme.palette.secondary.main,
-          border: `1px solid ${alpha(theme.palette.secondary.main, 0.3)}`,
-          "& .MuiChip-label": { px: 1 },
-          "&:hover": { background: alpha(theme.palette.secondary.main, 0.2) },
-        }}
-      />
-      {open && (
-        <Paper
-          elevation={4}
-          sx={{
-            position: "absolute",
-            bottom: "calc(100% + 6px)",
-            left: 0,
-            zIndex: 100,
-            maxWidth: 280,
-            p: 1.5,
-            borderRadius: 2,
-            fontSize: "0.75rem",
-            lineHeight: 1.5,
-          }}
-        >
-          <Typography
-            variant="caption"
-            sx={{ display: "block", mb: 0.5, fontWeight: 600 }}
-          >
-            Relevance: {((source.relevance_score ?? 0) * 100).toFixed(0)}%
-          </Typography>
-          <Typography variant="caption" color="text.secondary">
-            "{source.text_excerpt.slice(0, 180)}
-            {source.text_excerpt.length > 180 ? "..." : ""}"
-          </Typography>
-        </Paper>
-      )}
-    </Box>
-  );
 }
 
 function MessageBubble({ msg }: { msg: ChatMessage }) {
@@ -177,37 +133,53 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
           </Box>
         )}
 
-        {/* Source chips */}
-        {msg.sources && msg.sources.length > 0 && (
-          <Box
-            sx={{
-              mt: 1.5,
-              pt: 1,
-              borderTop: `1px solid ${
-                isUser
-                  ? "rgba(255,255,255,0.2)"
-                  : theme.palette.divider
-              }`,
-              display: "flex",
-              alignItems: "center",
-              gap: 0.75,
-              flexWrap: "wrap",
-            }}
-          >
+        {/* Low context warning */}
+        {!isUser && msg.has_sufficient_context === false && (
+          <Box sx={{ mt: 1, display: "flex", alignItems: "center", gap: 0.5 }}>
             <Typography
               variant="caption"
-              sx={{
-                color: isUser ? "rgba(255,255,255,0.7)" : "text.secondary",
-                fontSize: "0.68rem",
-              }}
+              sx={{ color: "warning.main", fontSize: "0.72rem", fontStyle: "italic" }}
             >
-              Sources:
+              ⚠️ Answer generated with limited document context.
             </Typography>
-            {msg.sources.map((s, idx) => (
-              <SourcePill key={s.chunk_id || idx} source={s} />
-            ))}
           </Box>
         )}
+
+        {/* Page reference (plain text, non-clickable) */}
+        {!isUser && msg.sources && msg.sources.length > 0 && (() => {
+          const pageNums = Array.from(
+            new Set(
+              msg.sources
+                .map((s) => s.page_number)
+                .filter((p): p is number => p != null)
+            )
+          ).sort((a, b) => a - b);
+
+          if (pageNums.length === 0) return null;
+
+          return (
+            <Box
+              sx={{
+                mt: 1.25,
+                pt: 0.75,
+                borderTop: `1px solid ${theme.palette.divider}`,
+                display: "flex",
+                alignItems: "center",
+              }}
+            >
+              <Typography
+                variant="caption"
+                sx={{
+                  color: "text.disabled",
+                  fontSize: "0.7rem",
+                  fontWeight: 500,
+                }}
+              >
+                Page {pageNums.join(", ")}
+              </Typography>
+            </Box>
+          );
+        })()}
       </Box>
     </Box>
   );
@@ -218,14 +190,43 @@ export function ChatPage() {
   const navigate = useNavigate();
   const theme = useTheme();
   const [selectedDocId, setSelectedDocId] = useState(paramDocId || "");
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [optimisticMessages, setOptimisticMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
+  const [clearDialogOpen, setClearDialogOpen] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+
   const [chat, { isLoading: sending }] = useChatMutation();
   const { data: docsData, isLoading: docsLoading } = useListDocumentsQuery({});
+  const { data: historyData, isLoading: historyLoading } = useGetChatHistoryQuery(
+    selectedDocId,
+    { skip: !selectedDocId }
+  );
+  const [clearChat, { isLoading: clearingChat }] = useClearChatHistoryMutation();
 
   const readyDocs =
     docsData?.documents.filter((d) => d.status === "ready") ?? [];
+
+  // Reset in-flight messages when document or history version changes
+  const [prevDocKey, setPrevDocKey] = useState<string>("");
+  const currentKey = `${selectedDocId}:${historyData?.total ?? 0}`;
+  if (currentKey !== prevDocKey) {
+    setPrevDocKey(currentKey);
+    setOptimisticMessages([]);
+  }
+
+  // Derive unified messages list from backend history + optimistic in-flight messages
+  const messages: ChatMessage[] = useMemo(() => {
+    const fromHistory: ChatMessage[] = (historyData?.messages ?? []).map((m) => ({
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      sources: m.sources,
+      has_sufficient_context: m.has_sufficient_context,
+      timestamp: new Date(m.created_at),
+    }));
+
+    return [...fromHistory, ...optimisticMessages];
+  }, [historyData, optimisticMessages]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -247,7 +248,7 @@ export function ChatPage() {
       content: text,
       timestamp: new Date(),
     };
-    setMessages((prev) => [...prev, userMsg]);
+    setOptimisticMessages((prev) => [...prev, userMsg]);
 
     try {
       const res = await chat({
@@ -261,9 +262,9 @@ export function ChatPage() {
         sources: res.sources,
         timestamp: new Date(),
       };
-      setMessages((prev) => [...prev, assistantMsg]);
+      setOptimisticMessages((prev) => [...prev, assistantMsg]);
     } catch {
-      setMessages((prev) => [
+      setOptimisticMessages((prev) => [
         ...prev,
         {
           id: crypto.randomUUID(),
@@ -324,7 +325,7 @@ export function ChatPage() {
             label="Select document"
             onChange={(e) => {
               setSelectedDocId(e.target.value);
-              setMessages([]);
+              setOptimisticMessages([]);
             }}
           >
             {docsLoading ? (
@@ -342,6 +343,30 @@ export function ChatPage() {
             )}
           </Select>
         </FormControl>
+
+        {/* Clear chat button */}
+        {selectedDocId && (
+          <Tooltip title={messages.length === 0 ? "No chat history to clear" : "Clear chat history"}>
+            <span>
+              <IconButton
+                size="small"
+                color="error"
+                onClick={() => setClearDialogOpen(true)}
+                disabled={clearingChat || historyLoading || messages.length === 0}
+                sx={{
+                  border: `1px solid ${alpha(theme.palette.error.main, 0.25)}`,
+                  borderRadius: "8px",
+                  p: 0.8,
+                  "&:hover": {
+                    background: alpha(theme.palette.error.main, 0.08),
+                  },
+                }}
+              >
+                <DeleteIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
       </Box>
 
       {!selectedDocId ? (
@@ -377,7 +402,23 @@ export function ChatPage() {
               flexDirection: "column",
             }}
           >
-            {messages.length === 0 && (
+            {historyLoading && messages.length === 0 ? (
+              <Box
+                sx={{
+                  flex: 1,
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  textAlign: "center",
+                  gap: 1.5,
+                  color: "text.secondary",
+                }}
+              >
+                <CircularProgress size={32} />
+                <Typography variant="body2">Loading conversation history...</Typography>
+              </Box>
+            ) : messages.length === 0 ? (
               <Box
                 sx={{
                   flex: 1,
@@ -412,7 +453,7 @@ export function ChatPage() {
                   on the content.
                 </Typography>
               </Box>
-            )}
+            ) : null}
 
             {messages.map((msg) => (
               <MessageBubble key={msg.id} msg={msg} />
@@ -483,6 +524,56 @@ export function ChatPage() {
           </Box>
         </>
       )}
+
+      {/* Clear Chat Confirmation Dialog */}
+      <Dialog
+        open={clearDialogOpen}
+        onClose={() => !clearingChat && setClearDialogOpen(false)}
+        maxWidth="xs"
+        fullWidth
+        slotProps={{ paper: { sx: { borderRadius: 3, p: 1 } } }}
+      >
+        <DialogTitle sx={{ fontWeight: 600 }}>Clear conversation history?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary">
+            This will permanently remove all previous messages for{" "}
+            <strong>{selectedDoc?.original_filename || "this document"}</strong>.
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ pb: 1.5, px: 2 }}>
+          <Button
+            onClick={() => setClearDialogOpen(false)}
+            color="inherit"
+            disabled={clearingChat}
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={async () => {
+              if (!selectedDocId) return;
+              try {
+                await clearChat(selectedDocId).unwrap();
+                setOptimisticMessages([]);
+                setClearDialogOpen(false);
+              } catch {
+                // error handled
+              }
+            }}
+            color="error"
+            variant="contained"
+            disabled={clearingChat}
+            startIcon={
+              clearingChat ? (
+                <CircularProgress size={16} color="inherit" />
+              ) : (
+                <DeleteIcon />
+              )
+            }
+          >
+            Clear History
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

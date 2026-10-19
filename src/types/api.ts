@@ -98,6 +98,28 @@ export interface ChatResponse {
   sources: SourceReference[];
 }
 
+export interface ChatMessageItem {
+  id: string;
+  document_id: string;
+  role: "user" | "assistant";
+  content: string;
+  sources: SourceReference[];
+  has_sufficient_context: boolean;
+  created_at: string;
+}
+
+export interface ChatHistoryResponse {
+  document_id: string;
+  messages: ChatMessageItem[];
+  total: number;
+}
+
+export interface ClearChatResponse {
+  document_id: string;
+  cleared_count: number;
+  detail: string;
+}
+
 // ==========================================
 // Quiz & Testing Types
 // ==========================================

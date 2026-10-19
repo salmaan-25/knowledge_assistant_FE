@@ -20,6 +20,8 @@ import type {
   DocumentProgressResponse,
   WeakTopicsResponse,
   HealthResponse,
+  ChatHistoryResponse,
+  ClearChatResponse,
 } from "../../types/api";
 import type {
   PlatformStats,
@@ -42,7 +44,7 @@ export const api = createApi({
       return headers;
     },
   }),
-  tagTypes: ["Document", "Progress", "Quiz", "User", "AdminUsers", "AdminStats"],
+  tagTypes: ["Document", "Progress", "Quiz", "User", "AdminUsers", "AdminStats", "Chat"],
   endpoints: (builder) => ({
     // ── Auth ───────────────────────────────────────────────────────────
     login: builder.mutation<AuthResponse, LoginRequest>({
@@ -131,6 +133,32 @@ export const api = createApi({
         method: "POST",
         body,
       }),
+      invalidatesTags: (_result, _error, { document_id }) => [
+        { type: "Chat", id: document_id },
+      ],
+    }),
+    getChatHistory: builder.query<
+      ChatHistoryResponse,
+      string | { documentId: string; limit?: number }
+    >({
+      query: (arg) => {
+        const documentId = typeof arg === "string" ? arg : arg.documentId;
+        const limit = typeof arg === "string" ? 100 : (arg.limit ?? 100);
+        return `/chat/${documentId}/history?limit=${limit}`;
+      },
+      providesTags: (_result, _error, arg) => {
+        const documentId = typeof arg === "string" ? arg : arg.documentId;
+        return [{ type: "Chat", id: documentId }];
+      },
+    }),
+    clearChatHistory: builder.mutation<ClearChatResponse, string>({
+      query: (documentId) => ({
+        url: `/chat/${documentId}/history`,
+        method: "DELETE",
+      }),
+      invalidatesTags: (_result, _error, documentId) => [
+        { type: "Chat", id: documentId },
+      ],
     }),
 
     // ── Quizzes ────────────────────────────────────────────────────────
@@ -238,6 +266,8 @@ export const {
   useDeleteDocumentMutation,
   useGenerateSummaryMutation,
   useChatMutation,
+  useGetChatHistoryQuery,
+  useClearChatHistoryMutation,
   useGenerateQuizMutation,
   useGetQuizQuery,
   useSubmitQuizMutation,

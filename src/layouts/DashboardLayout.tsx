@@ -36,7 +36,7 @@ import {
 import { useAuth } from "../hooks/useAuth";
 import { useAppDispatch, useAppSelector } from "../hooks/useAppStore";
 import { toggleTheme } from "../store/slices/uiSlice";
-import { useGetMeQuery } from "../store/api/apiSlice";
+import { api, useGetMeQuery } from "../store/api/apiSlice";
 
 const DRAWER_WIDTH = 248;
 const DRAWER_COLLAPSED = 64;
@@ -75,6 +75,7 @@ export function DashboardLayout() {
 
   const handleLogout = () => {
     logout();
+    dispatch(api.util.resetApiState());
     navigate("/login");
   };
 
