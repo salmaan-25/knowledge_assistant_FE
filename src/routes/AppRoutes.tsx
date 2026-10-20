@@ -13,6 +13,7 @@ import { QuizResultPage } from "../pages/quiz/QuizResultPage";
 import { ProgressPage } from "../pages/progress/ProgressPage";
 import { AdminOverviewPage } from "../pages/admin/AdminOverviewPage";
 import { AdminUsersPage } from "../pages/admin/AdminUsersPage";
+import { NotFoundPage } from "../pages/error/NotFoundPage";
 
 export function AppRoutes() {
   return (
@@ -46,9 +47,11 @@ export function AppRoutes() {
         </Route>
       </Route>
 
-      {/* Fallback */}
+      {/* Root redirect */}
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
-      <Route path="*" element={<Navigate to="/dashboard" replace />} />
+
+      {/* Custom 404 Page for unknown routes */}
+      <Route path="*" element={<NotFoundPage />} />
     </Routes>
   );
 }
